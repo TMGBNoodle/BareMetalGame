@@ -1,9 +1,11 @@
 #![no_std]
 
 use core::arch::x86_64::_rdtsc;
+use itoa::Buffer;
+use log::{info, warn};
 use num::Integer;
 use pc_keyboard::{DecodedKey, KeyCode};
-use pluggable_interrupt_os::{print, vga_buffer::{
+use pluggable_interrupt_os::{serial_print, print, vga_buffer::{
     clear_screen, is_drawable, plot, plot_num, plot_str, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH
 }};
 
@@ -32,6 +34,7 @@ pub struct PlayerObj {
 pub struct EnemyObj {
     id : usize,
     move_delay : usize,
+    max_delay : usize,
     alive: bool,
     pos_x: usize,
     pos_y: usize,
@@ -57,6 +60,7 @@ pub struct GamePlayer {
     active_enemies : usize,
     health : usize,
     rng : oorandom::Rand32,
+    init : bool,
 }
 
 pub fn safe_add<const LIMIT: usize>(a: usize, b: usize) -> usize {
@@ -84,6 +88,7 @@ impl Default for EnemyObj {
     fn default() -> Self {
         Self {
             id : 0,
+            max_delay : 10,
             move_delay : 10,
             pos_x: 0,
             pos_y: 0,
@@ -96,12 +101,19 @@ impl Default for EnemyObj {
 impl Default for GamePlayer {
     fn default() -> Self {
         Self {
-            enemies: generate_enemies(),
+            enemies: [EnemyObj::default(); 10],
             player: PlayerObj::default(),
-            projectiles : generate_proj(),
+            projectiles : [Projectile {
+                id : 0,
+                char: '*',
+                active: false,
+                pos_x: 0,
+                pos_y: 0,
+            }; BUFFER_HEIGHT],
+            init : false,
             health : 100,
             tick_count : 0,
-            tick_delay : 2,
+            tick_delay : 1,
             projectile_count : 0,
             active_enemies : 0,
             rng : unsafe {
@@ -111,38 +123,39 @@ impl Default for GamePlayer {
     }
 }
 
-fn generate_enemies() -> [EnemyObj; 10] {
-    let final_enemies = [EnemyObj::default(); 10];
-    let mut i = 0;
-    for mut enemy in final_enemies {
-        enemy.id = i;
-        i += 1;
-    }
-    return final_enemies;
-}
+// fn generate_enemies() -> [EnemyObj; 10] {
+//     let final_enemies = [EnemyObj::default(); 10];
+//     let mut i = 0;
+//     for mut enemy in final_enemies {
+//         enemy.id = i;
+//         i += 1;
+//     }
+//     return final_enemies;
+// }
 
-fn generate_proj() -> [Projectile; BUFFER_HEIGHT] {
-    let final_projectiles = [Projectile {
-        id : 0,
-        char: '*',
-        active: false,
-        pos_x: 0,
-        pos_y: 0,
-    }; BUFFER_HEIGHT];
-    let mut i = 0;
-    for mut proj in final_projectiles {
-        proj.id = i;
-        i += 1;
-    }
-    return final_projectiles
-}
+// fn generate_proj() -> [Projectile; BUFFER_HEIGHT] {
+//     let final_projectiles = [Projectile {
+//         id : 0,
+//         char: '*',
+//         active: false,
+//         pos_x: 0,
+//         pos_y: 0,
+//     }; BUFFER_HEIGHT];
+//     let mut i = 0;
+//     for mut proj in final_projectiles {
+//         proj.change_id(i);
+//         serial_print!("{}",proj.id);
+//         i += 1;
+//     }
+//     return final_projectiles
+// }
 
 impl Default for LetterMover {
     fn default() -> Self {
         Self {
             letters: ['A'; BUFFER_WIDTH],
             num_letters: 1,
-            next_letter: 1,
+            next_letter: 1, 
             col: BUFFER_WIDTH / 2,
             row: BUFFER_HEIGHT / 2,
             dx: 0,
@@ -150,8 +163,20 @@ impl Default for LetterMover {
         }
     }
 }
+
+impl Projectile {
+    pub fn change_id(&mut self, new_id: usize) {
+        self.id = new_id;
+    }
+    pub fn update_pos_y(&mut self, new_pos: usize) {
+        self.pos_x = new_pos;
+    }
+}
 impl GamePlayer {
     pub fn tick(&mut self) {
+        if self.init == false {
+            self.initialize();
+        }
         if self.health > 0
         {
             if self.tick_count >= self.tick_delay {
@@ -167,50 +192,90 @@ impl GamePlayer {
                 self.tick_count += 1
             }
         } else {
+            serial_print!("Dead");
             self.death_screen();
         }
     }
     pub fn input(&mut self, key: DecodedKey) {
+        if self.init == false {
+            self.initialize();
+        }
         match key {
             DecodedKey::RawKey(code) => self.handle_raw(code),
             DecodedKey::Unicode(c) => self.handle_unicode(c),
         }
     }
-
-    fn death_screen(&self) {
-        let death_message = "You Died!";
+    fn initialize(&mut self) {
         let mut i = 0;
-        for char in death_message.chars() {
-            plot(char, BUFFER_HEIGHT/2, BUFFER_WIDTH + i, ColorCode::new(Color::Black, Color::Black));
+        while i < self.projectiles.len() {
+            self.projectiles[i].id = i;
+            i += 1
+        }
+        i = 0;
+        while i < self.enemies.len() {
+            let move_delay = self.rng.rand_range(Range{ start: 3, end : 10});
+            self.enemies[i].id = i;
+            self.enemies[i].max_delay = move_delay as usize;
             i += 1;
         }
+        self.init = true
+    }
+    fn death_screen(&mut self) {
+        let death_message = "You Died!";
+        plot_str(death_message, BUFFER_HEIGHT/2, BUFFER_WIDTH, ColorCode::new(Color::Black, Color::Black));
     }
 
     fn move_items(&mut self) {
-        for mut enemy in self.enemies {
+        let mut i = 0;
+        while i < self.enemies.len() {
+            let enemy = self.enemies[i];
             if enemy.alive == true {
                 if enemy.move_delay <= 0 {
-                    if enemy.pos_y < BUFFER_HEIGHT {
-                        enemy.pos_y += 1;
+                    if enemy.pos_y < (BUFFER_HEIGHT-1) {
+                        serial_print!("{}", enemy.id);
+                        self.enemies[i].pos_y += 1;
                     } else {
+                        serial_print!("Enemy Id Reached: {}", enemy.id);
                         self.health -= 1;
-                        enemy.alive = false;
+                        self.enemies[i].alive = false;
+                        self.active_enemies -= 1;
                     }
-                    enemy.move_delay = 10;
+                    self.enemies[i].move_delay = enemy.max_delay;
                 } else {
-                    enemy.move_delay -= 1;
+                    self.enemies[i].move_delay -= 1;
                 }
             }
+            i += 1;
         }
-        for mut projectile in self.projectiles {
+        let mut i = 0;
+        while i < self.projectiles.len() {
+            let projectile = self.projectiles[i];
+            // serial_print!("{}",projectile.id);
             if projectile.active {
-                if projectile.pos_x > 0 {
-                    projectile.pos_x -= 1;
+                if projectile.pos_y > 1 {
+                    self.projectiles[i].pos_y -= 1;
+                    let mut x = 0;
+                    while x < self.enemies.len() {
+                        let enemy = self.enemies[x];
+                        if enemy.alive {
+                            if enemy.pos_y == self.projectiles[i].pos_y {
+                                let size = enemy.characters.len()/2;
+                                if self.projectiles[i].pos_x.abs_diff(enemy.pos_x) <= size {
+                                    if self.enemies[x].alive == true {
+                                        self.enemies[x].alive = false;
+                                        self.active_enemies -= 1;
+                                        self.projectiles[i].active = false;
+                                    }
+                                }
+                            }
+                        }
+                        x+=1
+                    }
                 } else {
-                    projectile.active = false;
-                    self.projectile_count -= 1;
+                    self.projectiles[i].active = false;
                 }
             }
+            i += 1
         }
     }
     fn draw(&mut self) {
@@ -240,19 +305,27 @@ impl GamePlayer {
                 let player_offset = self.player.characters.len()/2;
                 let mut i = 0;
                 for char in self.player.characters {
-                    plot(char, self.player.pos_x - player_offset + i, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                    if self.player.pos_x >= player_offset {
+                    let draw_pos = self.player.pos_x - player_offset + i;
+                    if draw_pos > 0 && draw_pos < BUFFER_WIDTH {
+                        plot(char, draw_pos, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                    }
+                }
                     i += 1;
                 }
             } else {
-                plot('B', self.player.pos_x, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                plot(self.player.characters[0], self.player.pos_x, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
             }
         } else {
             print!("Error: Non-Odd player character count")
         }
-        for projectile in self.projectiles {
+        let mut i = 0;
+        while i < self.projectiles.len() {
+            let projectile = self.projectiles[i];
             if projectile.active {
                 plot(projectile.char, projectile.pos_x, projectile.pos_y, ColorCode::new(Color::Green, Color::Black));
             }
+            i += 1;
         }
         
     }
@@ -260,6 +333,7 @@ impl GamePlayer {
     fn add_enemy(&mut self) {
         let mut id = 0;
         for enemy in self.enemies {
+            serial_print!("{}", enemy.id);
             if enemy.alive == false {
                 id = enemy.id
             }
@@ -272,11 +346,15 @@ impl GamePlayer {
     fn handle_unicode(&mut self, c: char) {
         match c {
             'a' => {
-                self.player.pos_x = sub1::<BUFFER_WIDTH>(self.player.pos_x);
+                if self.player.pos_x > 0 {
+                    self.player.pos_x -= 1;
+                } else  {
+                    self.player.pos_x = BUFFER_WIDTH;
+                }
                 self.draw();
             }
             'd' => {
-                self.player.pos_x = add1::<BUFFER_WIDTH>(self.player.pos_x); 
+                self.player.pos_x = safe_add::<BUFFER_WIDTH>(self.player.pos_x, 1); 
                 self.draw();
             }
             'w' => {

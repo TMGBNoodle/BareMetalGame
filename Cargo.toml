@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 bootloader = "0.9.30"
 itoa = "1.0.15"
+log = "0.4.26"
 oorandom = "11.1.5"
 pc-keyboard = "0.8.0"
 pluggable_interrupt_os = "0.5.2"
