@@ -1,13 +1,14 @@
 #![no_std]
 
+use core::arch::x86_64::_rdtsc;
 use num::Integer;
 use pc_keyboard::{DecodedKey, KeyCode};
 use pluggable_interrupt_os::{print, vga_buffer::{
-    clear_screen, is_drawable, plot, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH
+    clear_screen, is_drawable, plot, plot_num, plot_str, Color, ColorCode, BUFFER_HEIGHT, BUFFER_WIDTH
 }};
 
 use core::{
-    clone::{self, Clone}, cmp::{min, Eq, PartialEq}, error, iter::Iterator, marker::Copy, ops::Range, prelude::rust_2024::derive
+    clone::Clone, cmp::{min, Eq, PartialEq}, iter::Iterator, marker::Copy, ops::Range, prelude::rust_2024::derive
 };
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -24,12 +25,13 @@ pub struct LetterMover {
 pub struct PlayerObj {
     pos_x: usize,
     pos_y: usize,
-    characters: [char; 1],
+    characters: [char; 3],
 }
 
 #[derive(Copy, Clone)]
 pub struct EnemyObj {
     id : usize,
+    move_delay : usize,
     alive: bool,
     pos_x: usize,
     pos_y: usize,
@@ -49,6 +51,8 @@ pub struct GamePlayer {
     enemies: [EnemyObj; 10],
     player: PlayerObj,
     projectiles: [Projectile; BUFFER_HEIGHT],
+    tick_count : usize,
+    tick_delay : usize,
     projectile_count : usize,
     active_enemies : usize,
     health : usize,
@@ -72,13 +76,15 @@ impl Default for PlayerObj {
         Self {
             pos_x: BUFFER_WIDTH / 2,
             pos_y: BUFFER_HEIGHT - 2,
-            characters: ['*'],
+            characters: ['/','|','\\'],
         }
     }
 }
 impl Default for EnemyObj {
     fn default() -> Self {
         Self {
+            id : 0,
+            move_delay : 10,
             pos_x: 0,
             pos_y: 0,
             characters: ['<', '.', '>'],
@@ -90,21 +96,45 @@ impl Default for EnemyObj {
 impl Default for GamePlayer {
     fn default() -> Self {
         Self {
-            enemies: [EnemyObj::default(); 10],
+            enemies: generate_enemies(),
             player: PlayerObj::default(),
-            projectiles: [Projectile {
-                id : 0,
-                char: '*',
-                active: false,
-                pos_x: 0,
-                pos_y: 0,
-            }; BUFFER_HEIGHT],
+            projectiles : generate_proj(),
             health : 100,
+            tick_count : 0,
+            tick_delay : 2,
             projectile_count : 0,
             active_enemies : 0,
-            rng : oorandom::Rand32::new(50)
+            rng : unsafe {
+                oorandom::Rand32::new(_rdtsc())
+            },
         }
     }
+}
+
+fn generate_enemies() -> [EnemyObj; 10] {
+    let final_enemies = [EnemyObj::default(); 10];
+    let mut i = 0;
+    for mut enemy in final_enemies {
+        enemy.id = i;
+        i += 1;
+    }
+    return final_enemies;
+}
+
+fn generate_proj() -> [Projectile; BUFFER_HEIGHT] {
+    let final_projectiles = [Projectile {
+        id : 0,
+        char: '*',
+        active: false,
+        pos_x: 0,
+        pos_y: 0,
+    }; BUFFER_HEIGHT];
+    let mut i = 0;
+    for mut proj in final_projectiles {
+        proj.id = i;
+        i += 1;
+    }
+    return final_projectiles
 }
 
 impl Default for LetterMover {
@@ -124,13 +154,18 @@ impl GamePlayer {
     pub fn tick(&mut self) {
         if self.health > 0
         {
-            if self.active_enemies < 10 {
-                self.active_enemies += 1;
-                self.add_enemy(self.active_enemies - 1);
+            if self.tick_count >= self.tick_delay {
+                if self.active_enemies < 10 {
+                    self.active_enemies += 1;
+                    self.add_enemy();
+                }
+                clear_screen();
+                self.move_items();
+                self.draw();
+                self.tick_count = 0;
+            } else {
+                self.tick_count += 1
             }
-            self.clear_screen();
-            self.move_items();
-            self.draw();
         } else {
             self.death_screen();
         }
@@ -150,51 +185,20 @@ impl GamePlayer {
             i += 1;
         }
     }
-    fn clear_screen(&mut self) {
-        for enemy in self.enemies {
-                if enemy.characters.len() % 2 == 1 {
-                    if enemy.characters.len() > 1 {
-                        let offset = enemy.characters.len()/2;
-                        let mut i = 0;
-                        for _char in enemy.characters {
-                            if enemy.pos_x >= offset {
-                                plot(' ', enemy.pos_x - offset + i, enemy.pos_y, ColorCode::new(Color::Black, Color::Black));
-                                i += 1;
-                            }
-                        }
-                    } else {
-                        plot(' ', enemy.pos_x, enemy.pos_y, ColorCode::new(Color::Black, Color::Black));
-                    }
-                } else {
-                    print!("Error: Non-Odd enemy character count")
-                }
-        }
-        if self.player.characters.len() % 2 == 1 {
-            if self.player.characters.len() > 1 {
-                let player_offset = self.player.characters.len()/2;
-                for _char in self.player.characters {
-                    plot(' ', self.player.pos_x - player_offset, self.player.pos_y, ColorCode::new(Color::Black, Color::Black));
-                }
-            } else {
-                plot(' ', self.player.pos_x, self.player.pos_y, ColorCode::new(Color::Black, Color::Black));
-            }
-        } else {
-            print!("Error: Non-Odd player character count")
-        }
-        for projectile in self.projectiles {
-            if projectile.active {
-                plot(' ', projectile.pos_x, projectile.pos_y, ColorCode::new(Color::Black, Color::Black));
-            }
-        }
-    }
+
     fn move_items(&mut self) {
         for mut enemy in self.enemies {
             if enemy.alive == true {
-                if enemy.pos_y < BUFFER_HEIGHT {
-                    enemy.pos_y += 1;
+                if enemy.move_delay <= 0 {
+                    if enemy.pos_y < BUFFER_HEIGHT {
+                        enemy.pos_y += 1;
+                    } else {
+                        self.health -= 1;
+                        enemy.alive = false;
+                    }
+                    enemy.move_delay = 10;
                 } else {
-                    self.health -= 1;
-                    enemy.alive = false;
+                    enemy.move_delay -= 1;
                 }
             }
         }
@@ -210,6 +214,7 @@ impl GamePlayer {
         }
     }
     fn draw(&mut self) {
+        plot_num(self.health as isize, 0, 0, ColorCode::new(Color::Green, Color::Black));
         for enemy in self.enemies {
             if enemy.alive == true {
                 if enemy.characters.len() % 2 == 1 {
@@ -233,11 +238,13 @@ impl GamePlayer {
         if self.player.characters.len() % 2 == 1 {
             if self.player.characters.len() > 1 {
                 let player_offset = self.player.characters.len()/2;
+                let mut i = 0;
                 for char in self.player.characters {
-                    plot(char, self.player.pos_x - player_offset, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                    plot(char, self.player.pos_x - player_offset + i, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                    i += 1;
                 }
             } else {
-                plot(self.player.characters[0], self.player.pos_x, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                plot('B', self.player.pos_x, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
             }
         } else {
             print!("Error: Non-Odd player character count")
@@ -247,6 +254,7 @@ impl GamePlayer {
                 plot(projectile.char, projectile.pos_x, projectile.pos_y, ColorCode::new(Color::Green, Color::Black));
             }
         }
+        
     }
 
     fn add_enemy(&mut self) {
@@ -264,12 +272,15 @@ impl GamePlayer {
     fn handle_unicode(&mut self, c: char) {
         match c {
             'a' => {
-                if self.player.pos_x > 0 {
-                    self.player.pos_x = self.player.pos_x - 1;
-                }
+                self.player.pos_x = sub1::<BUFFER_WIDTH>(self.player.pos_x);
+                self.draw();
             }
             'd' => {
-                self.player.pos_x = safe_add::<BUFFER_WIDTH>(self.player.pos_x,1); 
+                self.player.pos_x = add1::<BUFFER_WIDTH>(self.player.pos_x); 
+                self.draw();
+            }
+            'w' => {
+                self.init_proj();
             }
             _ => {}
         }
@@ -278,16 +289,23 @@ impl GamePlayer {
         match code {
             KeyCode::Spacebar => {
                 self.projectile_count += 1;
-                self.init_proj(self.projectile_count - 1)
+                self.init_proj();
             }
             _ => {
 
             }
         }
     }
-    fn init_proj(&mut self, id : usize) {
+    fn init_proj(&mut self) {
+        let mut id = 0;
+        for proj in self.projectiles {
+            if proj.active == false {
+                id = proj.id
+            }
+        }
         let new_x_pos = self.player.pos_x;
         let new_y_pos = self.player.pos_y - 1;
+        self.projectiles[id].active = true;
         self.projectiles[id].pos_x = new_x_pos;
         self.projectiles[id].pos_y = new_y_pos;
     }
