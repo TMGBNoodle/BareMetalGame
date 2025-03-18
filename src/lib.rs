@@ -38,7 +38,7 @@ pub struct EnemyObj {
     alive: bool,
     pos_x: usize,
     pos_y: usize,
-    characters: [char; 3],
+    characters: [char; 5],
 }
 
 #[derive(Copy, Clone)]
@@ -92,7 +92,7 @@ impl Default for EnemyObj {
             move_delay : 10,
             pos_x: 0,
             pos_y: 0,
-            characters: ['<', '.', '>'],
+            characters: ['<', '#', '.', '#', '>'],
             alive: false,
         }
     }
@@ -111,7 +111,7 @@ impl Default for GamePlayer {
                 pos_y: 0,
             }; BUFFER_HEIGHT],
             init : false,
-            health : 100,
+            health : 10,
             tick_count : 0,
             tick_delay : 1,
             projectile_count : 0,
@@ -193,6 +193,7 @@ impl GamePlayer {
             }
         } else {
             serial_print!("Dead");
+            clear_screen();
             self.death_screen();
         }
     }
@@ -222,7 +223,12 @@ impl GamePlayer {
     }
     fn death_screen(&mut self) {
         let death_message = "You Died!";
-        plot_str(death_message, BUFFER_HEIGHT/2, BUFFER_WIDTH, ColorCode::new(Color::Black, Color::Black));
+        let mut i = 0;
+        for character in death_message.chars() {
+            plot(character, BUFFER_HEIGHT/2 + i, BUFFER_WIDTH/2, ColorCode::new(Color::Red, Color::Black));
+            serial_print!("{}", character);
+            i += 1
+        }
     }
 
     fn move_items(&mut self) {
