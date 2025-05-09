@@ -206,20 +206,33 @@ impl GamePlayer {
             DecodedKey::Unicode(c) => self.handle_unicode(c),
         }
     }
+    // health : 10,
+    // tick_count : 0,
+    // tick_delay : 1,
+    // projectile_count : 0,
+    // active_enemies : 0,
     fn initialize(&mut self) {
         let mut i = 0;
         while i < self.projectiles.len() {
+            self.projectiles[i].active = false;
             self.projectiles[i].id = i;
             i += 1
         }
         i = 0;
         while i < self.enemies.len() {
             let move_delay = self.rng.rand_range(Range{ start: 3, end : 10});
+            self.enemies[i].alive = false;
             self.enemies[i].id = i;
             self.enemies[i].max_delay = move_delay as usize;
             i += 1;
         }
-        self.init = true
+        self.health = 10;
+        self.tick_count = 0;
+        self.tick_delay = 1;
+        self.projectile_count = 0;
+        self.active_enemies = 0;
+        self.init = true;
+        self.player.pos_x = BUFFER_WIDTH/2;
     }
     fn death_screen(&mut self) {
         let death_message = "You Died!";
@@ -294,8 +307,11 @@ impl GamePlayer {
                         let mut i = 0;
                         for char in enemy.characters {
                             if enemy.pos_x >= offset {
-                                plot(char, enemy.pos_x - offset + i, enemy.pos_y, ColorCode::new(Color::Red, Color::Black));
-                                i += 1;
+                                let draw_pos = enemy.pos_x - offset + i;
+                                if draw_pos > 0 && draw_pos < BUFFER_WIDTH {
+                                    plot(char, enemy.pos_x - offset + i, enemy.pos_y, ColorCode::new(Color::Red, Color::Black));
+                                    i += 1;
+                                }
                             }
                         }
                     } else {
@@ -312,11 +328,11 @@ impl GamePlayer {
                 let mut i = 0;
                 for char in self.player.characters {
                     if self.player.pos_x >= player_offset {
-                    let draw_pos = self.player.pos_x - player_offset + i;
-                    if draw_pos > 0 && draw_pos < BUFFER_WIDTH {
-                        plot(char, draw_pos, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                        let draw_pos = self.player.pos_x - player_offset + i;
+                        if draw_pos > 0 && draw_pos < BUFFER_WIDTH {
+                            plot(char, draw_pos, self.player.pos_y, ColorCode::new(Color::Blue, Color::Black));
+                        }
                     }
-                }
                     i += 1;
                 }
             } else {
@@ -344,7 +360,7 @@ impl GamePlayer {
                 id = enemy.id
             }
         }
-        let new_x_pos = self.rng.rand_range(Range{start : 0, end : BUFFER_WIDTH as u32});
+        let new_x_pos = self.rng.rand_range(Range{start : 0, end : (BUFFER_WIDTH-1) as u32});
         self.enemies[id].alive = true;
         self.enemies[id].pos_x = new_x_pos as usize;
         self.enemies[id].pos_y = 0;
@@ -365,6 +381,9 @@ impl GamePlayer {
             }
             'w' => {
                 self.init_proj();
+            }
+            'r' => {
+                self.initialize();
             }
             _ => {}
         }
@@ -387,7 +406,7 @@ impl GamePlayer {
                 id = proj.id
             }
         }
-        let new_x_pos = self.player.pos_x;
+        let new_x_pos = min(self.player.pos_x, BUFFER_WIDTH-1);
         let new_y_pos = self.player.pos_y - 1;
         self.projectiles[id].active = true;
         self.projectiles[id].pos_x = new_x_pos;
